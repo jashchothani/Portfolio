@@ -15,6 +15,14 @@ export function createApp() {
   // first proxy hop so req.ip / rate limiting see the real client IP.
   app.set("trust proxy", 1);
 
+  // Normalize duplicate slashes in URL path (e.g. //api/contact -> /api/contact)
+  app.use((req, _res, next) => {
+    if (req.url.startsWith("//")) {
+      req.url = req.url.replace(/^\/+/, "/");
+    }
+    next();
+  });
+
   app.use(
     helmet({
       contentSecurityPolicy: false, // this API serves JSON/SSE only, no HTML to protect
