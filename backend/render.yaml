@@ -19,10 +19,16 @@ services:
       - key: NVIDIA_NIM_MODEL
         value: meta/llama-3.1-8b-instruct
       - key: FRONTEND_URL
-        sync: false
-      - key: RESEND_API_KEY
-        sync: false
+        value: https://jashchothani.vercel.app
+      - key: SMTP_SERVICE
+        value: gmail
+      - key: SMTP_USER
+        value: jashthakkar77@gmail.com
+      - key: SMTP_PASS
+        value: lxnsmoexuvcmlpcf
       - key: CONTACT_TO_EMAIL
-        sync: false
-      - key: CONTACT_FROM_EMAIL
+        value: jashthakkar77@gmail.com
+      - key: SMTP_FROM
+        value: Jash Chothani <jashthakkar77@gmail.com>
+      - key: RESEND_API_KEY
         sync: false
