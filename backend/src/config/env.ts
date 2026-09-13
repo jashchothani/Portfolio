@@ -8,7 +8,7 @@ const envSchema = z.object({
   NVIDIA_NIM_API_KEY: z.string().min(1, "NVIDIA_NIM_API_KEY is required"),
   NVIDIA_NIM_BASE_URL: z.string().url().default("https://integrate.api.nvidia.com/v1"),
   NVIDIA_NIM_MODEL: z.string().default("meta/llama-3.2-11b-vision-instruct"),
-  FRONTEND_URL: z.string().url().default("http://localhost:5173"),
+  FRONTEND_URL: z.string().default("https://jashchothani.vercel.app"),
   // Email (contact form) — SMTP or Resend
   RESEND_API_KEY: z.string().optional(),
   CONTACT_TO_EMAIL: z.string().email().optional(),
@@ -42,7 +42,7 @@ export const env = {
   NVIDIA_NIM_BASE_URL:
     process.env.NVIDIA_NIM_BASE_URL ?? "https://integrate.api.nvidia.com/v1",
   NVIDIA_NIM_MODEL: process.env.NVIDIA_NIM_MODEL ?? "meta/llama-3.2-11b-vision-instruct",
-  FRONTEND_URL: process.env.FRONTEND_URL ?? "http://localhost:5173",
+  FRONTEND_URL: process.env.FRONTEND_URL ?? "https://jashchothani.vercel.app",
   RESEND_API_KEY: process.env.RESEND_API_KEY ?? "",
   CONTACT_TO_EMAIL: process.env.CONTACT_TO_EMAIL ?? "jashthakkar77@gmail.com",
   CONTACT_FROM_EMAIL: process.env.CONTACT_FROM_EMAIL ?? "Jash's Portfolio <jashthakkar77@gmail.com>",

@@ -26,8 +26,25 @@ function escapeHtml(input: string): string {
     .replace(/"/g, "&quot;");
 }
 
+export function getPortfolioWebsiteUrl(): string {
+  const envUrl = (process.env.FRONTEND_URL || "").trim();
+  const urls = envUrl.split(",").map((u) => u.trim());
+  const publicUrl = urls.find(
+    (u) =>
+      (u.startsWith("http://") || u.startsWith("https://")) &&
+      !u.includes("localhost") &&
+      !u.includes("127.0.0.1")
+  );
+
+  if (publicUrl) {
+    return publicUrl.replace(/\/+$/, "");
+  }
+  // Default to live production portfolio URL
+  return "https://jashchothani.vercel.app";
+}
+
 function layout(bodyHtml: string, previewText: string): string {
-  const siteUrl = process.env.FRONTEND_URL || "https://jashchothani.dev";
+  const siteUrl = getPortfolioWebsiteUrl();
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -75,7 +92,7 @@ function layout(bodyHtml: string, previewText: string): string {
                     <!-- Avatar with Specular Ring -->
                     <td width="50" style="vertical-align:middle;">
                       <div style="width:48px;height:48px;border-radius:50%;overflow:hidden;background:linear-gradient(135deg, #2563EB, #7C3AED);text-align:center;line-height:48px;color:#ffffff;font-weight:700;font-size:16px;border:2.5px solid #FFFFFF;box-shadow:0 4px 18px rgba(56, 189, 248, 0.40);">
-                        <img src="cid:jashAvatar" width="48" height="48" alt="Jash" style="display:block;width:48px;height:48px;object-fit:cover;border-radius:50%;" onerror="this.style.display='none'" />
+                        <img src="${siteUrl}/jash-headshot.png" width="48" height="48" alt="Jash" style="display:block;width:48px;height:48px;object-fit:cover;border-radius:50%;" onerror="this.style.display='none'" />
                       </div>
                     </td>
                     <!-- Identity & Role -->
@@ -143,7 +160,7 @@ function layout(bodyHtml: string, previewText: string): string {
 /** Confirms to the visitor that their message was received. */
 export function buildVisitorAutoReplyEmail(submission: SubmissionInput): { subject: string; html: string } {
   const firstName = submission.name.trim().split(/\s+/)[0] || submission.name;
-  const siteUrl = process.env.FRONTEND_URL || "https://jashchothani.dev";
+  const siteUrl = getPortfolioWebsiteUrl();
 
   const dateStr = new Date(submission.receivedAt).toLocaleDateString("en-US", {
     month: "short",
