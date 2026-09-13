@@ -20,63 +20,42 @@ export interface ContactSubmission {
   receivedAt: string;
 }
 
-let cachedTransporter: Transporter | null = null;
-
-function getSmtpTransporter() {
-  if (cachedTransporter) {
-    return cachedTransporter;
-  }
-
+async function getSmtpTransporter(): Promise<Transporter | null> {
   const user = env.SMTP_USER?.trim();
   const pass = env.SMTP_PASS?.replace(/\s+/g, "");
   if (!user || !pass || pass.length === 0) {
     return null;
   }
 
-  // Force IPv4 lookup callback for nodemailer socket to completely prevent IPv6 ENETUNREACH on Render
-  const ipv4Lookup = (
-    hostname: string,
-    options: unknown,
-    callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void
-  ) => {
-    dns.lookup(hostname, { family: 4 }, (err, address, family) => {
-      callback(err, address, family);
-    });
-  };
+  const hostname = env.SMTP_HOST || "smtp.gmail.com";
 
-  const isGmail = env.SMTP_SERVICE === "gmail" || user.includes("@gmail.com");
-
-  if (isGmail) {
-    cachedTransporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true,
-      lookup: ipv4Lookup,
-      connectionTimeout: 12000,
-      greetingTimeout: 12000,
-      socketTimeout: 15000,
-      auth: {
-        user,
-        pass,
-      },
-    } as any);
-    return cachedTransporter;
+  // Explicitly resolve IPv4 to prevent Nodemailer from connecting via IPv6 on Render (ENETUNREACH)
+  let hostTarget = hostname;
+  try {
+    const ipv4s = await dns.promises.resolve4(hostname);
+    if (ipv4s && ipv4s.length > 0) {
+      hostTarget = ipv4s[0];
+      console.log(`[contact] Successfully resolved ${hostname} to IPv4: ${hostTarget}`);
+    }
+  } catch (err) {
+    console.warn(`[contact] IPv4 resolution for ${hostname} skipped, using hostname:`, err);
   }
 
-  cachedTransporter = nodemailer.createTransport({
-    host: env.SMTP_HOST || "smtp.gmail.com",
-    port: env.SMTP_PORT || 465,
-    secure: env.SMTP_SECURE || env.SMTP_PORT === 465,
-    lookup: ipv4Lookup,
+  return nodemailer.createTransport({
+    host: hostTarget,
+    port: 465,
+    secure: true,
+    tls: {
+      servername: hostname, // Required when connecting by IP address for TLS verification
+    },
     connectionTimeout: 12000,
     greetingTimeout: 12000,
     socketTimeout: 15000,
     auth: {
-      user: env.SMTP_USER,
-      pass: env.SMTP_PASS,
+      user,
+      pass,
     },
-  } as any);
-  return cachedTransporter;
+  });
 }
 
 /**
@@ -100,7 +79,7 @@ export async function notifyNewContactSubmission(
   const ownerEmail = buildOwnerNotificationEmail(submission);
   const visitorEmail = buildVisitorAutoReplyEmail(submission);
 
-  const transporter = getSmtpTransporter();
+  const transporter = await getSmtpTransporter();
 
   if (transporter) {
     console.log("[contact] Sending emails via SMTP...");
@@ -136,13 +115,9 @@ export async function notifyNewContactSubmission(
       }
 
       const anySent = ownerResult.status === "fulfilled" || visitorResult.status === "fulfilled";
-      if (!anySent) {
-        cachedTransporter = null;
-      }
       return { emailSent: anySent };
     } catch (err) {
       console.error("[contact] Error sending emails via SMTP:", err);
-      cachedTransporter = null;
       return { emailSent: false };
     }
   }
