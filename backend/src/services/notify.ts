@@ -1,16 +1,13 @@
-import nodemailer, { type Transporter } from "nodemailer";
+import nodemailer from "nodemailer";
 import dns from "node:dns";
-import path from "path";
-import fs from "fs";
-import { Resend } from "resend";
 import { env } from "../config/env.js";
 import { buildOwnerNotificationEmail, buildVisitorAutoReplyEmail } from "./emailTemplates.js";
 
-// Ensure IPv4 is prioritized in this module to prevent ENETUNREACH on cloud containers
+// Ensure IPv4 is prioritized in this process to prevent IPv6 ENETUNREACH errors on cloud hosts
 try {
   dns.setDefaultResultOrder("ipv4first");
 } catch {
-  // Ignore
+  // Ignore in older runtimes
 }
 
 export interface ContactSubmission {
@@ -20,51 +17,17 @@ export interface ContactSubmission {
   receivedAt: string;
 }
 
-async function getSmtpTransporter(): Promise<Transporter | null> {
-  const user = env.SMTP_USER?.trim();
-  const pass = env.SMTP_PASS?.replace(/\s+/g, "");
-  if (!user || !pass || pass.length === 0) {
-    return null;
-  }
-
-  const hostname = env.SMTP_HOST || "smtp.gmail.com";
-
-  // Explicitly resolve IPv4 to prevent Nodemailer from connecting via IPv6 on Render (ENETUNREACH)
-  let hostTarget = hostname;
-  try {
-    const ipv4s = await dns.promises.resolve4(hostname);
-    if (ipv4s && ipv4s.length > 0) {
-      hostTarget = ipv4s[0];
-      console.log(`[contact] Successfully resolved ${hostname} to IPv4: ${hostTarget}`);
-    }
-  } catch (err) {
-    console.warn(`[contact] IPv4 resolution for ${hostname} skipped, using hostname:`, err);
-  }
-
-  return nodemailer.createTransport({
-    host: hostTarget,
-    port: 465,
-    secure: true,
-    tls: {
-      servername: hostname, // Required when connecting by IP address for TLS verification
-    },
-    connectionTimeout: 12000,
-    greetingTimeout: 12000,
-    socketTimeout: 15000,
-    auth: {
-      user,
-      pass,
-    },
-  });
+interface SmtpAttempt {
+  name: string;
+  host: string;
+  port: number;
+  secure: boolean;
+  servername?: string;
 }
 
 /**
- * Handles a validated contact form submission:
- *   1. Emails the site owner (${env.CONTACT_TO_EMAIL}) with the visitor's message.
- *   2. Emails the visitor a branded confirmation auto-reply from Jash.
- *
- * Primary delivery is via SMTP (e.g., Gmail with an App Password or any custom SMTP server).
- * If SMTP credentials are not set, falls back to Resend if RESEND_API_KEY is present.
+ * Handles contact form submissions strictly via SMTP (Gmail with App Password).
+ * Tries modern submission Port 587 (STARTTLS) first, falling back to Port 465 (SSL).
  */
 export async function notifyNewContactSubmission(
   submission: ContactSubmission
@@ -76,74 +39,87 @@ export async function notifyNewContactSubmission(
     messagePreview: submission.message.slice(0, 140),
   });
 
-  const ownerEmail = buildOwnerNotificationEmail(submission);
-  const visitorEmail = buildVisitorAutoReplyEmail(submission);
-
-  // 1. Prioritize Resend over HTTPS (port 443) — Render blocks outbound SMTP ports 465/587
-  if (env.RESEND_API_KEY) {
-    console.log("[contact] Sending emails via Resend HTTPS API...");
-    const resend = new Resend(env.RESEND_API_KEY);
-
-    // Resend requires verified domain or 'onboarding@resend.dev' for sandbox
-    const fromAddress = env.CONTACT_FROM_EMAIL.includes("@gmail.com")
-      ? "Jash Chothani <onboarding@resend.dev>"
-      : env.CONTACT_FROM_EMAIL;
-
-    try {
-      const results = await Promise.allSettled([
-        resend.emails.send({
-          from: fromAddress,
-          to: env.CONTACT_TO_EMAIL,
-          replyTo: submission.email,
-          subject: ownerEmail.subject,
-          html: ownerEmail.html,
-        }),
-        resend.emails.send({
-          from: fromAddress,
-          to: submission.email,
-          replyTo: env.CONTACT_TO_EMAIL,
-          subject: visitorEmail.subject,
-          html: visitorEmail.html,
-        }),
-      ]);
-
-      const ownerResult = results[0];
-      const visitorResult = results[1];
-
-      if (ownerResult.status === "fulfilled" && !("error" in ownerResult.value && ownerResult.value.error)) {
-        console.log("[contact] Successfully sent owner notification via Resend to", env.CONTACT_TO_EMAIL);
-      } else {
-        const err = ownerResult.status === "fulfilled" ? ownerResult.value.error : ownerResult.reason;
-        console.error("[contact] Failed to send owner notification via Resend:", err);
-      }
-
-      if (visitorResult.status === "fulfilled" && !("error" in visitorResult.value && visitorResult.value.error)) {
-        console.log("[contact] Successfully sent auto-reply confirmation via Resend to", submission.email);
-      } else {
-        const err = visitorResult.status === "fulfilled" ? visitorResult.value.error : visitorResult.reason;
-        console.error("[contact] Failed to send auto-reply confirmation via Resend:", err);
-      }
-
-      const anySent =
-        (ownerResult.status === "fulfilled" && !("error" in ownerResult.value && ownerResult.value.error)) ||
-        (visitorResult.status === "fulfilled" && !("error" in visitorResult.value && visitorResult.value.error));
-
-      if (anySent) {
-        return { emailSent: true };
-      }
-      console.warn("[contact] Resend did not deliver, attempting SMTP fallback...");
-    } catch (err) {
-      console.error("[contact] Unexpected error sending email via Resend:", err);
-    }
+  const user = env.SMTP_USER?.trim();
+  const pass = env.SMTP_PASS?.replace(/\s+/g, "");
+  if (!user || !pass || pass.length === 0) {
+    console.error("[contact] SMTP credentials (SMTP_USER / SMTP_PASS) are missing.");
+    return { emailSent: false };
   }
 
-  // 2. Fallback to SMTP (Direct IPv4 on port 465)
-  const transporter = await getSmtpTransporter();
+  const ownerEmail = buildOwnerNotificationEmail(submission);
+  const visitorEmail = buildVisitorAutoReplyEmail(submission);
+  const hostname = env.SMTP_HOST || "smtp.gmail.com";
 
-  if (transporter) {
-    console.log("[contact] Sending emails via SMTP...");
+  // Resolve IPv4 address in advance so we have an alternative route if hostname lookup has issues
+  let resolvedIpv4 = "";
+  try {
+    const addresses = await dns.promises.resolve4(hostname);
+    if (addresses && addresses.length > 0) {
+      resolvedIpv4 = addresses[0];
+    }
+  } catch (err) {
+    console.warn(`[contact] DNS resolve4 for ${hostname} skipped:`, err);
+  }
 
+  // Ordered SMTP delivery attempts
+  const attempts: SmtpAttempt[] = [
+    // 1. Port 587 STARTTLS (Standard submission port, widely permitted on cloud providers)
+    {
+      name: "smtp.gmail.com:587 (STARTTLS)",
+      host: hostname,
+      port: 587,
+      secure: false,
+    },
+    // 2. Port 465 SSL (Direct SMTPS)
+    {
+      name: "smtp.gmail.com:465 (SSL)",
+      host: hostname,
+      port: 465,
+      secure: true,
+    },
+  ];
+
+  // 3. Direct IPv4 IP address fallback if resolved
+  if (resolvedIpv4) {
+    attempts.push(
+      {
+        name: `${resolvedIpv4}:587 (Direct IPv4 STARTTLS)`,
+        host: resolvedIpv4,
+        port: 587,
+        secure: false,
+        servername: hostname,
+      },
+      {
+        name: `${resolvedIpv4}:465 (Direct IPv4 SSL)`,
+        host: resolvedIpv4,
+        port: 465,
+        secure: true,
+        servername: hostname,
+      }
+    );
+  }
+
+  for (const attempt of attempts) {
+    console.log(`[contact] Trying SMTP delivery via ${attempt.name}...`);
     try {
+      const transporter = nodemailer.createTransport({
+        host: attempt.host,
+        port: attempt.port,
+        secure: attempt.secure,
+        family: 4, // Strict IPv4 in net.connect — prevents IPv6 ENETUNREACH
+        connectionTimeout: 20000,
+        greetingTimeout: 20000,
+        socketTimeout: 30000,
+        auth: {
+          user,
+          pass,
+        },
+        tls: {
+          servername: attempt.servername || hostname,
+          rejectUnauthorized: false,
+        },
+      } as any);
+
       const [ownerResult, visitorResult] = await Promise.allSettled([
         transporter.sendMail({
           from: env.SMTP_FROM,
@@ -162,29 +138,26 @@ export async function notifyNewContactSubmission(
       ]);
 
       if (ownerResult.status === "fulfilled") {
-        console.log("[contact] Successfully sent owner notification via SMTP to", env.CONTACT_TO_EMAIL);
+        console.log(`[contact] Successfully sent owner notification via ${attempt.name} to ${env.CONTACT_TO_EMAIL}`);
       } else {
-        console.error("[contact] Failed to send owner notification via SMTP:", ownerResult.reason);
+        console.error(`[contact] Owner email rejected on ${attempt.name}:`, ownerResult.reason);
       }
 
       if (visitorResult.status === "fulfilled") {
-        console.log("[contact] Successfully sent auto-reply confirmation via SMTP to", submission.email);
+        console.log(`[contact] Successfully sent auto-reply confirmation via ${attempt.name} to ${submission.email}`);
       } else {
-        console.error("[contact] Failed to send auto-reply confirmation via SMTP:", visitorResult.reason);
+        console.error(`[contact] Visitor email rejected on ${attempt.name}:`, visitorResult.reason);
       }
 
       const anySent = ownerResult.status === "fulfilled" || visitorResult.status === "fulfilled";
-      return { emailSent: anySent };
+      if (anySent) {
+        return { emailSent: true };
+      }
     } catch (err) {
-      console.error("[contact] Error sending emails via SMTP:", err);
-      return { emailSent: false };
+      console.error(`[contact] Attempt failed on ${attempt.name}:`, err);
     }
   }
 
-  console.warn(
-    "[contact] Neither RESEND_API_KEY nor working SMTP is available. " +
-      "Render free tier blocks raw SMTP connections (ports 465/587). " +
-      "To send emails reliably on Render, set RESEND_API_KEY in Render Dashboard."
-  );
+  console.error("[contact] All SMTP attempts were unsuccessful.");
   return { emailSent: false };
 }
