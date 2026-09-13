@@ -45,7 +45,7 @@ export const env = {
   FRONTEND_URL: process.env.FRONTEND_URL ?? "https://jashchothani.vercel.app",
   RESEND_API_KEY: process.env.RESEND_API_KEY ?? "",
   CONTACT_TO_EMAIL: process.env.CONTACT_TO_EMAIL || "jashthakkar77@gmail.com",
-  CONTACT_FROM_EMAIL: process.env.CONTACT_FROM_EMAIL || "Jash's Portfolio <jashthakkar77@gmail.com>",
+  CONTACT_FROM_EMAIL: process.env.CONTACT_FROM_EMAIL || "Jash Chothani <onboarding@resend.dev>",
   // SMTP settings
   SMTP_HOST: process.env.SMTP_HOST ?? (process.env.SMTP_SERVICE ? undefined : "smtp.gmail.com"),
   SMTP_PORT: Number(process.env.SMTP_PORT ?? 587),

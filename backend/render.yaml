@@ -28,7 +28,7 @@ services:
         value: lxnsmoexuvcmlpcf
       - key: CONTACT_TO_EMAIL
         value: jashthakkar77@gmail.com
-      - key: SMTP_FROM
-        value: Jash Chothani <jashthakkar77@gmail.com>
       - key: RESEND_API_KEY
         sync: false
+      - key: CONTACT_FROM_EMAIL
+        value: Jash Chothani <onboarding@resend.dev>
