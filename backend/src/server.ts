@@ -1,3 +1,12 @@
+import dns from "node:dns";
+
+// Force IPv4 first to prevent ENETUNREACH errors on cloud container hosts (Render/Docker)
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  // Ignore in older Node versions
+}
+
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 

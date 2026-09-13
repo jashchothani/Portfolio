@@ -1,9 +1,17 @@
 import nodemailer, { type Transporter } from "nodemailer";
+import dns from "node:dns";
 import path from "path";
 import fs from "fs";
 import { Resend } from "resend";
 import { env } from "../config/env.js";
 import { buildOwnerNotificationEmail, buildVisitorAutoReplyEmail } from "./emailTemplates.js";
+
+// Ensure IPv4 is prioritized in this module to prevent ENETUNREACH on cloud containers
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  // Ignore
+}
 
 export interface ContactSubmission {
   name: string;
@@ -25,38 +33,49 @@ function getSmtpTransporter() {
     return null;
   }
 
-  if (env.SMTP_SERVICE) {
+  // Force IPv4 lookup callback for nodemailer socket to completely prevent IPv6 ENETUNREACH on Render
+  const ipv4Lookup = (
+    hostname: string,
+    options: unknown,
+    callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void
+  ) => {
+    dns.lookup(hostname, { family: 4 }, (err, address, family) => {
+      callback(err, address, family);
+    });
+  };
+
+  const isGmail = env.SMTP_SERVICE === "gmail" || user.includes("@gmail.com");
+
+  if (isGmail) {
     cachedTransporter = nodemailer.createTransport({
-      service: env.SMTP_SERVICE,
-      pool: true,
-      maxConnections: 3,
-      maxMessages: 100,
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      lookup: ipv4Lookup,
+      connectionTimeout: 12000,
+      greetingTimeout: 12000,
       socketTimeout: 15000,
       auth: {
         user,
         pass,
       },
-    });
+    } as any);
     return cachedTransporter;
   }
 
   cachedTransporter = nodemailer.createTransport({
     host: env.SMTP_HOST || "smtp.gmail.com",
-    port: env.SMTP_PORT || 587,
-    secure: env.SMTP_SECURE,
-    pool: true,
-    maxConnections: 3,
-    maxMessages: 100,
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
+    port: env.SMTP_PORT || 465,
+    secure: env.SMTP_SECURE || env.SMTP_PORT === 465,
+    lookup: ipv4Lookup,
+    connectionTimeout: 12000,
+    greetingTimeout: 12000,
     socketTimeout: 15000,
     auth: {
       user: env.SMTP_USER,
       pass: env.SMTP_PASS,
     },
-  });
+  } as any);
   return cachedTransporter;
 }
 
@@ -117,9 +136,13 @@ export async function notifyNewContactSubmission(
       }
 
       const anySent = ownerResult.status === "fulfilled" || visitorResult.status === "fulfilled";
+      if (!anySent) {
+        cachedTransporter = null;
+      }
       return { emailSent: anySent };
     } catch (err) {
       console.error("[contact] Error sending emails via SMTP:", err);
+      cachedTransporter = null;
       return { emailSent: false };
     }
   }
