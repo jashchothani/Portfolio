@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import nodemailer, { type Transporter } from "nodemailer";
 import path from "path";
 import fs from "fs";
 import { Resend } from "resend";
@@ -12,7 +12,13 @@ export interface ContactSubmission {
   receivedAt: string;
 }
 
-function createSmtpTransporter() {
+let cachedTransporter: Transporter | null = null;
+
+function getSmtpTransporter() {
+  if (cachedTransporter) {
+    return cachedTransporter;
+  }
+
   const user = env.SMTP_USER?.trim();
   const pass = env.SMTP_PASS?.replace(/\s+/g, "");
   if (!user || !pass || pass.length === 0) {
@@ -20,24 +26,38 @@ function createSmtpTransporter() {
   }
 
   if (env.SMTP_SERVICE) {
-    return nodemailer.createTransport({
+    cachedTransporter = nodemailer.createTransport({
       service: env.SMTP_SERVICE,
+      pool: true,
+      maxConnections: 3,
+      maxMessages: 100,
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
       auth: {
         user,
         pass,
       },
     });
+    return cachedTransporter;
   }
 
-  return nodemailer.createTransport({
+  cachedTransporter = nodemailer.createTransport({
     host: env.SMTP_HOST || "smtp.gmail.com",
     port: env.SMTP_PORT || 587,
     secure: env.SMTP_SECURE,
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 100,
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
     auth: {
       user: env.SMTP_USER,
       pass: env.SMTP_PASS,
     },
   });
+  return cachedTransporter;
 }
 
 /**
@@ -61,30 +81,10 @@ export async function notifyNewContactSubmission(
   const ownerEmail = buildOwnerNotificationEmail(submission);
   const visitorEmail = buildVisitorAutoReplyEmail(submission);
 
-  const transporter = createSmtpTransporter();
+  const transporter = getSmtpTransporter();
 
   if (transporter) {
     console.log("[contact] Sending emails via SMTP...");
-
-    // Find avatar asset for inline email rendering
-    const avatarCandidates = [
-      path.resolve(process.cwd(), "dist/assets/jash-headshot.png"),
-      path.resolve(process.cwd(), "src/assets/jash-headshot.png"),
-      path.resolve(process.cwd(), "backend/dist/assets/jash-headshot.png"),
-      path.resolve(process.cwd(), "backend/src/assets/jash-headshot.png"),
-      path.resolve(process.cwd(), "../frontend/src/assets/jash-headshot.png"),
-      path.resolve(process.cwd(), "frontend/src/assets/jash-headshot.png"),
-    ];
-    const avatarPath = avatarCandidates.find((p) => fs.existsSync(p));
-    const attachments = avatarPath
-      ? [
-          {
-            filename: "jash-portrait.png",
-            path: avatarPath,
-            cid: "jashAvatar",
-          },
-        ]
-      : [];
 
     try {
       const [ownerResult, visitorResult] = await Promise.allSettled([
@@ -94,7 +94,6 @@ export async function notifyNewContactSubmission(
           replyTo: submission.email,
           subject: ownerEmail.subject,
           html: ownerEmail.html,
-          attachments,
         }),
         transporter.sendMail({
           from: env.SMTP_FROM,
@@ -102,7 +101,6 @@ export async function notifyNewContactSubmission(
           replyTo: env.CONTACT_TO_EMAIL,
           subject: visitorEmail.subject,
           html: visitorEmail.html,
-          attachments,
         }),
       ]);
 

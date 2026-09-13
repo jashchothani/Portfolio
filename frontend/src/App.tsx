@@ -14,10 +14,18 @@ import { Certifications } from "./sections/Certifications";
 import { Contact } from "./sections/Contact";
 import { Footer } from "./sections/Footer";
 import { GlobalParticles } from "./three/GlobalParticles";
+import { API_URL } from "./lib/utils";
 
 export default function App() {
   useLenis();
   const [techStackOpen, setTechStackOpen] = useState(false);
+
+  // Pre-warm backend container in background so contact form & AI chat are instant
+  useEffect(() => {
+    fetch(`${API_URL}/api/health`, { method: "GET" }).catch(() => {
+      // Non-blocking silent wake-up
+    });
+  }, []);
 
   useEffect(() => {
     function checkHash() {
